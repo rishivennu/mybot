@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+from dotenv import load_dotenv  # Ensure dotenv is imported correctly
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation
 from elevenlabs.types import ConversationConfig
@@ -9,7 +10,7 @@ import traceback
 from streamlit_audio_recorder import audio_recorder
 
 # Load environment variables
-load_dotenv()
+load_dotenv()  # Make sure to load the environment variables correctly
 AGENT_ID = os.getenv("AGENT_ID")
 API_KEY = os.getenv("API_KEY")
 
