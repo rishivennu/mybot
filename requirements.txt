@@ -2,3 +2,4 @@ streamlit
 elevenlabs
 python-dotenv
 streamlit-audio-recorder
+streamlit-webrtc

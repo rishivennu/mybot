@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation
 from elevenlabs.types import ConversationConfig
