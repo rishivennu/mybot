@@ -3,11 +3,12 @@ import os
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from elevenlabs.conversational_ai.conversation import Conversation
-from elevenlabs.conversational_ai.default_audio_interface import DefaultAudioInterface
+# Removed: from elevenlabs.conversational_ai.default_audio_interface import DefaultAudioInterface
 from elevenlabs.types import ConversationConfig
 import threading
 import queue # For thread-safe communication
 import traceback # For detailed error logging
+from streamlit_audio_recorder import audio_recorder # Import the browser-based recorder
 
 # Load environment variables
 load_dotenv()
@@ -35,30 +36,13 @@ def get_calendar_events(date_str: str):
     if "today" in date_str.lower():
         return "Based on a hypothetical calendar: Sales Meeting with Taipy at 10:00; Gym with Sophie at 17:00."
     return "I'm not yet fully connected to a live calendar to fetch specific dates."
-
-def add_calendar_event(summary: str, start_time_str: str, end_time_str: str = None):
-    print(f"[Tool Sim] Attempting to add calendar event: {summary} at {start_time_str}...")
-    return f"Okay, I've made a note to schedule '{summary}' at {start_time_str}. (This is a simulation)"
-
-def search_web(query: str):
-    print(f"[Tool Sim] Attempting to search web for: {query}...")
-    if "weather in london" in query.lower():
-        return "According to a quick search, it's usually mild in London, but check a live source for today!"
-    return f"I found some information about '{query}', but I'm still learning to summarize it well."
-
-def get_recipe(dish_name: str):
-    print(f"[Tool Sim] Attempting to find recipe for: {dish_name}...")
-    if "pasta" in dish_name.lower():
-        return f"For {dish_name}, you'll typically need pasta, tomato sauce, garlic, and olive oil. Cook pasta, prepare sauce, combine and serve!"
-    return f"I'd love to find a recipe for {dish_name}, but my cookbook is currently offline."
-
+# ... (keep other tool functions)
 def add_task(task_description: str):
     print(f"[Tool Sim] Attempting to add task: {task_description}...")
     if "tasks" not in st.session_state:
         st.session_state.tasks = []
     st.session_state.tasks.append(task_description)
     return f"Task '{task_description}' has been noted."
-
 def get_tasks():
     print(f"[Tool Sim] Attempting to retrieve tasks...")
     if "tasks" not in st.session_state or not st.session_state.tasks:
@@ -66,7 +50,7 @@ def get_tasks():
     tasks_str = "; ".join(st.session_state.tasks)
     return f"Your current tasks are: {tasks_str}."
 
-# --- Callback Functions (Keep as is) ---
+# --- Callback Functions (Keep as is - they handle incoming messages) ---
 def queue_agent_response(response_text):
     print(f"Callback: queue_agent_response received: {response_text[:30]}...")
     message_queue.put(("agent", response_text))
@@ -76,22 +60,30 @@ def queue_interrupted_response(original, corrected):
     message_queue.put(("interrupted", corrected))
 
 def queue_user_transcript(transcript):
+    # This callback might still be triggered if ElevenLabs performs its own VAD/transcription
+    # based on the audio chunks you send, or it might become irrelevant. Monitor its behavior.
     print(f"Callback: queue_user_transcript received: {transcript[:30]}...")
-    message_queue.put(("user", transcript))
+    message_queue.put(("user_transcript_from_elevenlabs", transcript)) # Renamed for clarity
 
-# --- Function to run the conversation in a separate thread (Keep as is) ---
-def run_conversation_session(conv_obj):
+
+# --- Function to run the conversation connection/listener in a separate thread ---
+# Now, this thread mainly manages the WebSocket connection lifetime and listens for server messages.
+# It no longer actively captures audio using an interface.
+def run_conversation_listener(conv_obj):
     try:
-        print("CONV_THREAD: Conversation thread started.")
+        print("CONV_THREAD: Conversation listener thread started.")
+        # start_session now likely initializes the connection, sends config,
+        # and enters a loop listening for responses from ElevenLabs.
+        # It's assumed blocking until the connection ends or is closed.
         conv_obj.start_session()
         print("CONV_THREAD: start_session() returned (session presumably ended cleanly).")
         message_queue.put(("ended", "Session ended cleanly."))
     except Exception as e:
-        print(f"CONV_THREAD: An error occurred in start_session() or during conversation: {e}")
+        print(f"CONV_THREAD: An error occurred in listener thread: {e}")
         print(f"CONV_THREAD: Traceback: {traceback.format_exc()}")
-        message_queue.put(("error", f"Error during conversation: {e}"))
+        message_queue.put(("error", f"Error during conversation connection: {e}"))
     finally:
-        print("CONV_THREAD: Conversation thread finished execution block (finally).")
+        print("CONV_THREAD: Conversation listener thread finished execution block (finally).")
         message_queue.put(("ended_from_finally", "Session processing finished in thread."))
 
 
@@ -100,7 +92,6 @@ st.set_page_config(page_title="Voice Assistant", layout="centered")
 st.title("🎙️ Your AI Personal Assistant")
 
 print(f"STREAMLIT_MAIN: Script run. Conversation Active: {st.session_state.get('conversation_active')}, Queue size: {message_queue.qsize()}")
-
 
 user_name = st.text_input("Your Name", "Alex")
 schedule_input = st.text_area("Today's Schedule (for initial context)", "Sales Meeting with Taipy at 10:00; Gym with Sophie at 17:00")
@@ -113,18 +104,12 @@ with col1:
             st.error("AGENT_ID or API_KEY is not set. Please check your .env file.")
             print("STREAMLIT_MAIN: Missing AGENT_ID or API_KEY.")
         else:
-            # Reset log for a new conversation, starting with "Initializing..."
             st.session_state.conversation_log = "Initializing conversation...\n"
             st.session_state.conversation_active = True
-            print("STREAMLIT_MAIN: Set conversation_active=True, log initialized to 'Initializing...'.")
+            print("STREAMLIT_MAIN: Set conversation_active=True, log initialized.")
 
-            prompt = (
-                f"You are a highly capable AI personal assistant for {user_name}. "
-                f"Your primary functions include: Scheduling and managing appointments, answering queries by searching the web, "
-                f"providing cooking instructions, and managing daily tasks. "
-                f"Your interlocutor, {user_name}, has the following initial schedule: {schedule_input}. "
-            )
-            first_message = f"Hello {user_name}, I'm your AI personal assistant. Today's schedule I have for you is: {schedule_input}. How can I help you further?"
+            prompt = ( /* Your prompt remains the same */ )
+            first_message = f"Hello {user_name}, I'm your AI personal assistant..." # Your first message
 
             conversation_override = {"agent": {"prompt": {"prompt": prompt},"first_message": first_message,},}
             config = ConversationConfig(
@@ -133,33 +118,33 @@ with col1:
                 dynamic_variables={}
             )
             try:
-                print("STREAMLIT_MAIN: Attempting to create ElevenLabs client and Conversation object.")
+                print("STREAMLIT_MAIN: Attempting to create ElevenLabs client and Conversation object (without audio_interface).")
                 client = ElevenLabs(api_key=API_KEY)
+                # !!! IMPORTANT: Initialize Conversation WITHOUT the audio_interface !!!
                 conversation = Conversation(
                     client, AGENT_ID, config=config, requires_auth=True,
-                    audio_interface=DefaultAudioInterface(),
+                    # No audio_interface parameter here
                     callback_agent_response=queue_agent_response,
                     callback_agent_response_correction=queue_interrupted_response,
-                    callback_user_transcript=queue_user_transcript,
+                    callback_user_transcript=queue_user_transcript, # Keep other callbacks
                 )
                 st.session_state.conversation_object = conversation
                 print("STREAMLIT_MAIN: Conversation object created successfully.")
 
-                thread = threading.Thread(target=run_conversation_session, args=(conversation,), name="ElevenLabsConversationThread")
+                # Start the listener thread
+                thread = threading.Thread(target=run_conversation_listener, args=(conversation,), name="ElevenLabsListenerThread")
                 thread.daemon = True
                 thread.start()
-                print(f"STREAMLIT_MAIN: Conversation thread '{thread.name}' started.")
-                # No st.info here, the log will show "Initializing..."
+                print(f"STREAMLIT_MAIN: Conversation listener thread '{thread.name}' started.")
                 st.rerun()
 
             except Exception as e:
-                st.error(f"Failed to initialize or start conversation: {e}")
+                st.error(f"Failed to initialize or start conversation listener: {e}")
                 print(f"STREAMLIT_MAIN: Exception during conversation setup: {e}\n{traceback.format_exc()}")
                 st.session_state.conversation_active = False
                 st.session_state.conversation_object = None
-                # Update log to show error if setup failed
                 st.session_state.conversation_log = f"Failed to initialize conversation: {e}\n"
-                st.rerun() # Rerun to show the error in the log
+                st.rerun()
 
 with col2:
     if st.button("Stop Voice Assistant", disabled=not st.session_state.get("conversation_active", False), key="stop_button"):
@@ -168,35 +153,73 @@ with col2:
             try:
                 print("STREAMLIT_MAIN: Calling conversation_object.end_session()")
                 st.session_state.conversation_object.end_session()
-                # The conversation thread should detect this and queue an "ended" message.
-                # We can add a message to the log directly for immediate feedback
                 st.session_state.conversation_log += "\nStop request sent. Waiting for session to terminate...\n"
-                st.info("Stop request sent. Waiting for full termination via callback.")
+                st.info("Stop request sent. Waiting for confirmation via callback.")
             except Exception as e:
                 st.warning(f"Error trying to explicitly end session with SDK: {e}")
                 print(f"STREAMLIT_MAIN: Exception calling end_session(): {e}\n{traceback.format_exc()}")
         else:
             print("STREAMLIT_MAIN: Stop button clicked, but no active conversation object found.")
-            st.session_state.conversation_active = False # Ensure it's marked inactive
+            st.session_state.conversation_active = False
         st.rerun()
 
+# --- NEW: Audio Recorder UI ---
+if st.session_state.get("conversation_active", False):
+    st.markdown("---")
+    st.subheader("Speak Here:")
+    # Use the audio recorder component
+    audio_bytes = audio_recorder(
+        text="", # No button text needed, icon serves as trigger
+        # energy_threshold=(-1.0, 0.1), # Adjust silence detection if needed
+        pause_threshold=1.5, # Seconds of silence to end recording
+        sample_rate=16000,   # Ensure this matches what your ElevenLabs agent expects
+        icon_size="2x",
+        key="recorder" # Add a key for stability
+    )
 
-# --- Process Message Queue (in the main Streamlit thread) ---
+    if audio_bytes:
+        print(f"STREAMLIT_MAIN: Recorded {len(audio_bytes)} audio bytes from browser.")
+        # st.audio(audio_bytes, format="audio/wav") # Optional: Play back recorded audio for debugging
+
+        conversation_obj = st.session_state.get("conversation_object")
+        if conversation_obj:
+            # ---!!! Placeholder: Send audio bytes to ElevenLabs !!!---
+            # This is the part that needs verification with the elevenlabs SDK documentation.
+            # Does the 'Conversation' object have a method to send audio chunks?
+            print("STREAMLIT_MAIN: Trying to send audio bytes (METHOD NEEDS VERIFICATION).")
+            try:
+                # EXAMPLE - REPLACE 'send_audio_bytes' with the ACTUAL method if it exists
+                # conversation_obj.send_audio_bytes(audio_bytes)
+                # If no direct method exists, you might need manual WebSocket interaction here.
+
+                # For now, just log that user spoke and audio was captured
+                message_queue.put(("user_spoke", f"(Audio bytes captured: {len(audio_bytes)})"))
+                st.info("Audio sent for processing (placeholder action).") # UI feedback
+                print("STREAMLIT_MAIN: Audio bytes captured - sending logic needs implementation/verification.")
+                st.rerun() # Rerun to potentially clear the recorder state if needed
+
+            except AttributeError:
+                err_msg = "Conversation object doesn't have a method to directly send audio bytes."
+                st.error(f"SDK Issue: {err_msg} Manual WebSocket handling might be required.")
+                print(f"STREAMLIT_MAIN: {err_msg}")
+                message_queue.put(("error", err_msg))
+            except Exception as e:
+                err_msg = f"Error sending audio data: {e}"
+                st.error(err_msg)
+                print(f"STREAMLIT_MAIN: {err_msg}\n{traceback.format_exc()}")
+                message_queue.put(("error", err_msg))
+            # ---!!! End Placeholder !!!---
+        else:
+            print("STREAMLIT_MAIN: Audio recorded, but no active conversation object found in state.")
+            st.warning("Audio recorded, but the conversation session seems inactive.")
+
+
+# --- Process Message Queue (Mostly unchanged) ---
 rerun_needed_for_ui = False
 processed_message_count = 0
 
-# Initialize log if it's somehow missing (defensive)
 if "conversation_log" not in st.session_state:
     st.session_state.conversation_log = ""
-
-# Check if the log is still "Initializing..." and the queue has messages.
-# If so, we should clear "Initializing..." before appending actual conversation.
-if st.session_state.conversation_log == "Initializing conversation...\n" and not message_queue.empty():
-    # Check if the first message is NOT an error or premature end
-    # This logic might be too complex; simpler to just append.
-    # For now, let's assume appending is fine and "Initializing..." will be scrolled away.
-    pass
-
 
 if not message_queue.empty():
     print(f"STREAMLIT_MAIN: Processing message queue (initial size: {message_queue.qsize()}).")
@@ -207,16 +230,15 @@ while not message_queue.empty():
         processed_message_count += 1
         print(f"STREAMLIT_MAIN: Dequeued message: Type='{message_type}', Content='{str(message_content)[:50]}...'")
 
-        # If the log is currently "Initializing...", clear it before adding the first real message,
-        # unless the first message is an error that should replace it.
-        if st.session_state.conversation_log == "Initializing conversation...\n" and message_type != "error":
-            st.session_state.conversation_log = ""
-
+        if st.session_state.conversation_log == "Initializing conversation...\n" and message_type not in ["error", "ended", "ended_from_finally"]:
+            st.session_state.conversation_log = "" # Clear "Initializing" once real content arrives
 
         if message_type == "agent":
             st.session_state.conversation_log += f"\n**Assistant:** {message_content}\n"
-        elif message_type == "user":
-            st.session_state.conversation_log += f"\n**You:** {message_content}\n"
+        elif message_type == "user_transcript_from_elevenlabs": # Handle transcript if SDK still provides it
+             st.session_state.conversation_log += f"\n**You (Transcribed by EL):** {message_content}\n"
+        elif message_type == "user_spoke": # Log indication that user spoke via browser recorder
+             st.session_state.conversation_log += f"\n**You:** {message_content}\n"
         elif message_type == "interrupted":
             st.session_state.conversation_log += f"\n**Assistant (interrupted, truncated):** {message_content}\n"
         elif message_type == "ended" or message_type == "ended_from_finally":
@@ -229,17 +251,17 @@ while not message_queue.empty():
             else:
                 print(f"STREAMLIT_MAIN: Processed '{message_type}' message, but conversation already inactive.")
         elif message_type == "error":
-            # Replace "Initializing..." or append error.
             error_msg_to_log = f"\n**CONVERSATION ERROR:** {message_content}\n"
             if st.session_state.conversation_log == "Initializing conversation...\n":
                 st.session_state.conversation_log = error_msg_to_log
             else:
                 st.session_state.conversation_log += error_msg_to_log
-
             st.error(f"A conversation error occurred: {message_content}")
             st.session_state.conversation_active = False
             st.session_state.conversation_object = None
             print(f"STREAMLIT_MAIN: Processed 'error' message: {message_content}. Conversation marked inactive.")
+        elif message_type == "system_debug": # Handle placeholder message
+             st.session_state.conversation_log += f"\n**DEBUG:** {message_content}\n"
         else:
             print(f"STREAMLIT_MAIN: Unknown message type in queue: {message_type}")
 
@@ -253,7 +275,7 @@ while not message_queue.empty():
         rerun_needed_for_ui = True
 
 if processed_message_count > 0:
-     print(f"STREAMLIT_MAIN: Processed {processed_message_count} messages in this run. Log snippet: '{st.session_state.get('conversation_log', '')[-100:]}'")
+     print(f"STREAMLIT_MAIN: Processed {processed_message_count} messages in this run.")
 
 if rerun_needed_for_ui:
     print("STREAMLIT_MAIN: Calling st.rerun() due to processed messages or state change.")
@@ -263,18 +285,12 @@ if rerun_needed_for_ui:
 # --- Display Conversation Log (Live) ---
 st.markdown("### Conversation Log")
 log_display_content = st.session_state.get("conversation_log", "").strip()
+final_display = log_display_content if log_display_content else "_Conversation will appear here once started._"
 
-if not log_display_content: # If log is empty or only whitespace
-    final_display = "_Conversation will appear here once started._"
-elif log_display_content == "Initializing conversation...": # If it's *still* only initializing
-    final_display = "Initializing conversation..."
-else: # Actual content exists
-    final_display = log_display_content
-
-# Render the final_display
-if final_display == "_Conversation will appear here once started._" or final_display == "Initializing conversation...":
+if final_display == "_Conversation will appear here once started._":
     st.markdown(final_display)
 else:
+     # Use a div for consistent display, handle "Initializing..." within the content
     st.markdown(f"<div style='height:300px;overflow-y:scroll;border:1px solid #ccc;padding:10px;font-family:monospace;white-space:pre-wrap;'>{final_display}</div>", unsafe_allow_html=True)
 
 
@@ -287,6 +303,5 @@ if tasks_list:
 else:
     st.markdown("_No tasks added yet._")
 
-if st.session_state.get("conversation_active", False):
-    st.empty()
-    print("STREAMLIT_MAIN: Conversation active, rendered st.empty() for potential refresh trigger.")
+# Removed the st.empty() keepalive as reruns are now driven by queue processing
+ print("STREAMLIT_MAIN: Reached end of script run.") # Optional final debug print

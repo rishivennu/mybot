@@ -1,0 +1,9 @@
+streamlit
+elevenlabs
+python-dotenv  # Good practice, though Vercel uses its own env vars
+streamlit-audio-recorder # Or your chosen audio component
+# Add any other direct dependencies your script uses
+# Dependencies of the above (like requests, websockets, pydantic) are usually handled automatically
+streamlit
+python-dotenv
+# any other packages your app needs
