@@ -1,0 +1,12 @@
+
+**You:** What’s on my calendar today?
+
+**Assistant:** Sales Meeting with Taipy at 10:00; Gym with Sophie at 17:00.
+
+**You:** How do I make pasta?
+
+**Assistant:** Here's a simple recipe for pasta (simulated).
+
+**You:** What are my tasks?
+
+**Assistant:** No tasks yet.

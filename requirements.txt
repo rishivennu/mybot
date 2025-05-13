@@ -1,5 +1,6 @@
 streamlit
 elevenlabs
 python-dotenv
-streamlit-audio-recorder
 streamlit-webrtc
+av  # PyAV is a dependency for streamlit-webrtc audio/video processing
+numpy # For numerical operations on audio data
